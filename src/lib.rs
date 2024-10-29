@@ -183,10 +183,7 @@ mod tests {
         // mapper = HexagonCircleMapper(resolution=12)
         // phoenix_center = (33.4484, -112.0740)
         // radius = 50
-        //
-        // # Export hexagon IDs separately for easier comparison
         // hexagons = mapper.get_hexagons(phoenix_center, radius)
-        //
         // print(hexagons)
         let python_hexes: HashSet<String> = vec![
             "8c29b6d357aa7ff",
