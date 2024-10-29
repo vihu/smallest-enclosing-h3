@@ -1,0 +1,9 @@
+[package]
+name = "smallest-enclosing-h3"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+geo 		= "0"
+h3o 		= "0"
+thiserror 	= "1"
