@@ -4,6 +4,9 @@ use h3o::{CellIndex, LatLng, Resolution};
 
 pub mod error;
 
+#[cfg(feature = "geojson_export")]
+pub mod geojson_export;
+
 // in meters
 const EARTH_RADIUS: f64 = 6371000.0;
 
