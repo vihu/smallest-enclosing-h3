@@ -1,5 +1,4 @@
 use error::{Result, SmallestEnclosingH3Error};
-use geo::algorithm::vincenty_distance::VincentyDistance;
 use geo::{point, Point};
 use h3o::{CellIndex, LatLng, Resolution};
 
@@ -72,8 +71,25 @@ pub struct SmallestEnclosingH3 {
 impl SmallestEnclosingH3 {
     pub fn hexagons(&self) -> Result<Vec<CellIndex>> {
         let center_cell = self.center.to_cell(self.resolution);
-        let k = self.calculate_k_ring_size()?;
-        Ok(center_cell.grid_disk_fast(k).flatten().collect())
+
+        // Calculate the distance to the edge of the circle
+        let edge_lat = self.destination_point(
+            &point!(x: self.center.lng(), y: self.center.lat()),
+            self.radius_meters,
+            0.0, // bearing of 0 degrees (north)
+        )?;
+
+        let edge_cell = LatLng::new(edge_lat.y(), edge_lat.x())
+            .map_err(|e| SmallestEnclosingH3Error::InvalidLatLng(e.to_string()))?
+            .to_cell(self.resolution);
+
+        // Calculate the grid distance between center and edge
+        let k = center_cell
+            .grid_distance(edge_cell)
+            .map_err(|e| SmallestEnclosingH3Error::GridDistanceError(e.to_string()))?;
+
+        // Get only the ring at distance k (not the entire disk)
+        Ok(center_cell.grid_ring_fast(k as u32).flatten().collect())
     }
 
     pub fn generate_circle_coordinates(&self) -> Result<Vec<Vec<f64>>> {
@@ -118,42 +134,12 @@ impl SmallestEnclosingH3 {
             y: lat2.to_degrees()
         ))
     }
-
-    fn calculate_k_ring_size(&self) -> Result<u32> {
-        let center_cell = self.center.to_cell(self.resolution);
-        let center_point = point!(x: self.center.lng(), y: self.center.lat());
-
-        // Get the hex edge length
-        let hex_edge = self.resolution.edge_length_m();
-
-        // Calculate number of rings needed to cover the radius
-        // Adding a small buffer to ensure we fully cover the circle
-        let k = (self.radius_meters / hex_edge).ceil() as u32;
-
-        // TODO: Verify the calculation by checking the actual distance
-        let ring_cells = center_cell.grid_disk_fast(k).flatten();
-        let mut max_distance: f64 = 0.0;
-
-        for cell in ring_cells {
-            if let Some(cell_center) = cell.center_child(Resolution::Fifteen) {
-                let latlng = LatLng::from(cell_center);
-                let cell_point = point!(x: latlng.lng(), y: latlng.lat());
-                let distance = center_point.vincenty_distance(&cell_point).unwrap_or(0.0);
-                max_distance = max_distance.max(distance);
-            }
-        }
-
-        if max_distance < self.radius_meters {
-            Ok(k + 1)
-        } else {
-            Ok(k)
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     #[test]
     fn test_builder_with_valid_inputs() {
@@ -170,5 +156,74 @@ mod tests {
             result,
             Err(SmallestEnclosingH3Error::InvalidRadius(_))
         ));
+    }
+
+    #[test]
+    fn test_matches_python_implementation() {
+        // Phoenix center coordinates
+        let lat = 33.4484;
+        let lng = -112.0740;
+        let radius_meters = 50.0;
+        let resolution = Resolution::Twelve;
+
+        let center = LatLng::new(lat, lng).unwrap();
+        let smallest_enclosing_h3 =
+            SmallestEnclosingH3Builder::new(center, radius_meters, resolution)
+                .build()
+                .unwrap();
+
+        let hexes: HashSet<String> = smallest_enclosing_h3
+            .hexagons()
+            .unwrap()
+            .into_iter()
+            .map(|h| h.to_string())
+            .collect();
+
+        // From python:
+        // mapper = HexagonCircleMapper(resolution=12)
+        // phoenix_center = (33.4484, -112.0740)
+        // radius = 50
+        //
+        // # Export hexagon IDs separately for easier comparison
+        // hexagons = mapper.get_hexagons(phoenix_center, radius)
+        //
+        // print(hexagons)
+        let python_hexes: HashSet<String> = vec![
+            "8c29b6d357aa7ff",
+            "8c29b6d357a33ff",
+            "8c29b6d357853ff",
+            "8c29b6d357ac3ff",
+            "8c29b6d357aa5ff",
+            "8c29b6d357ab9ff",
+            "8c29b6d357aa3ff",
+            "8c29b6d357851ff",
+            "8c29b6d357ad5ff",
+            "8c29b6d357859ff",
+            "8c29b6d357a3bff",
+            "8c29b6d357acdff",
+            "8c29b6d357a13ff",
+            "8c29b6d357a17ff",
+            "8c29b6d357abdff",
+            "8c29b6d357a83ff",
+            "8c29b6d357ac1ff",
+            "8c29b6d357a8bff",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+
+        assert_eq!(
+            hexes.len(),
+            python_hexes.len(),
+            "Number of hexagons doesn't match"
+        );
+
+        let diff: Vec<_> = hexes.symmetric_difference(&python_hexes).collect();
+
+        assert!(
+            diff.is_empty(),
+            "Hexagon sets don't match. Difference: {:?}",
+            diff
+        );
     }
 }
